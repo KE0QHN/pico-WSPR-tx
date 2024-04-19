@@ -7,7 +7,7 @@
 //
 //
 //  main.c - The project entry point.
-// 
+//
 //  DESCRIPTION
 //      The pico-WSPR-tx project provides WSPR beacon function using only
 //  Pi Pico board. *NO* additional hardware such as freq.synth required.
@@ -34,7 +34,7 @@
 //      MIT License (http://www.opensource.org/licenses/mit-license.php)
 //
 //  Copyright (c) 2023 by Roman Piksaykin
-//  
+//
 //  Permission is hereby granted, free of charge,to any person obtaining a copy
 //  of this software and associated documentation files (the Software), to deal
 //  in the Software without restriction,including without limitation the rights
@@ -65,13 +65,14 @@
 #include <WSPRbeacon.h>
 #include <logutils.h>
 #include <protos.h>
+#include "pico/time.h" // Include for time_us_64() function
 
 #define CONFIG_GPS_SOLUTION_IS_MANDATORY NO
 #define CONFIG_GPS_RELY_ON_PAST_SOLUTION NO
 #define CONFIG_SCHEDULE_SKIP_SLOT_COUNT 5
 #define CONFIG_WSPR_DIAL_FREQUENCY 18106000UL //24926000UL // 28126000UL //7040000UL
-#define CONFIG_CALLSIGN "R2BDY"
-#define CONFIG_LOCATOR4 "KO85"
+#define CONFIG_CALLSIGN "KE0QHN"
+#define CONFIG_LOCATOR4 "DM79"
 
 WSPRbeaconContext *pWSPR;
 
@@ -98,7 +99,7 @@ int main()
         );
     assert_(pWB);
     pWSPR = pWB;
-    
+
     pWB->_txSched._u8_tx_GPS_mandatory  = CONFIG_GPS_SOLUTION_IS_MANDATORY;
     pWB->_txSched._u8_tx_GPS_past_time  = CONFIG_GPS_RELY_ON_PAST_SOLUTION;
     pWB->_txSched._u8_tx_slot_skip      = CONFIG_SCHEDULE_SKIP_SLOT_COUNT;
@@ -110,53 +111,43 @@ int main()
     assert_(DCO._pGPStime);
 
     int tick = 0;
+    bool transmitting = false;
+    uint64_t next_tx_time = 0;
+
     for(;;)
     {
-        /*
-        if(WSPRbeaconIsGPSsolutionActive(pWB))
-        {
-            const char *pgps_qth = WSPRbeaconGetLastQTHLocator(pWB);
-            if(pgps_qth)
-            {
-                strncpy(pWB->_pu8_locator, pgps_qth, 4);
-                pWB->_pu8_locator[5] = 0x00;
-            }
-        }
-        */
-       
-        if(pWB->_txSched._u8_tx_GPS_mandatory)
-        {
-            WSPRbeaconTxScheduler(pWB, YES);
-        }
-        else
-        {
-            StampPrintf("Omitting GPS solution, start tx now.");
-            PioDCOStart(pWB->_pTX->_p_oscillator);
-            WSPRbeaconCreatePacket(pWB);
+        if (transmitting) {
+            // Transmitting, so flash the LED
+            gpio_put(PICO_DEFAULT_LED_PIN, 1);
             sleep_ms(100);
-            WSPRbeaconSendPacket(pWB);
-            StampPrintf("The system will be halted when tx is completed.");
-            for(;;)
-            {
-                if(!TxChannelPending(pWB->_pTX))
-                {
-                    PioDCOStop(pWB->_pTX->_p_oscillator);
-                    StampPrintf("System halted.");
-                }
-                gpio_put(PICO_DEFAULT_LED_PIN, 1);
-                sleep_ms(500);
-                gpio_put(PICO_DEFAULT_LED_PIN, 0);
+            gpio_put(PICO_DEFAULT_LED_PIN, 0);
+            sleep_ms(100);
+
+            // Check if transmission is complete
+            if (!TxChannelPending(pWB->_pTX)) {
+                transmitting = false;
+                PioDCOStop(pWB->_pTX->_p_oscillator);
+                StampPrintf("Transmission complete.");
+
+                // Set the next transmission time to 2 minutes from now
+                next_tx_time = time_us_64() + 120000000;
+            }
+        } else {
+            // Not transmitting, check if it's time to transmit again
+            if (time_us_64() >= next_tx_time) {
+                transmitting = true;
+                StampPrintf("Transmitting...");
+                PioDCOStart(pWB->_pTX->_p_oscillator);
+                WSPRbeaconCreatePacket(pWB);
+                sleep_ms(100);
+                WSPRbeaconSendPacket(pWB);
             }
         }
-        
-        gpio_put(PICO_DEFAULT_LED_PIN, 1);
-        sleep_ms(100);
-        gpio_put(PICO_DEFAULT_LED_PIN, 0);
 
 #ifdef DEBUG
-        if(0 == ++tick % 60)
+        if (0 == ++tick % 60)
             WSPRbeaconDumpContext(pWB);
 #endif
-        sleep_ms(900);
+        sleep_ms(100); // Adjust this delay as needed
     }
 }
